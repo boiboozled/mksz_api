@@ -1,3 +1,59 @@
-.venv/
+# --- Scraped data (never commit) -------------------------------------------------------------------
+# Default raw-payload cache (data/raw) and CSV exports of the `mksz` CLI
+data/
+# Common alternative locations for MKSZ_CACHE_DIR / --cache-dir and exports
+cache/
+.cache/
+raw/
+output/
+out/
+exports/
+*.csv
+# Rendered pages saved by `mksz-roster --save-html` and dumps from scripts/recon.py
+pages/
+recon/
+# Lineup files written by `mksz-roster -o`
+lineup*.json
+# Test fixtures ARE committed on purpose: the offline tests need them.
+!tests/fixtures/
+!tests/fixtures/**
+
+# --- Python ----------------------------------------------------------------------------------------
 __pycache__/
+*.py[cod]
 *.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+
+# --- Virtual environments --------------------------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Tests, coverage, type checkers, linters -------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# --- Playwright artifacts --------------------------------------------------------------------------
+test-results/
+playwright-report/
+*.har
+trace.zip
+
+# --- Notebooks, editors, OS ------------------------------------------------------------------------
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+.env

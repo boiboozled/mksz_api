@@ -1,19 +1,41 @@
 [project]
-name = "mksz-roster"
+name = "mksz-api"
 version = "0.1.0"
-description = "Download handball match rosters (numbers, names, goalkeepers) from the MKSZ livescore site"
+description = "nba_api-style access to MKSZ (Hungarian handball) data: seasons, competitions, matches, boxscores, play-by-play"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "boiboozled" }]
 requires-python = ">=3.10"
-dependencies = ["playwright>=1.47", "beautifulsoup4>=4.12"]
+dependencies = ["playwright>=1.47", "beautifulsoup4>=4.12", "pandas>=2"]
+keywords = ["handball", "mksz", "sports-data", "sports-analytics", "scraper", "playwright"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
 
+[project.urls]
+Homepage = "https://github.com/boiboozled/mksz_api"
+Repository = "https://github.com/boiboozled/mksz_api"
+Issues = "https://github.com/boiboozled/mksz_api/issues"
+
 [project.scripts]
 mksz-roster = "mksz_roster.scrape:main"
+mksz = "mksz_api.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mksz_roster"]
+packages = ["src/mksz_roster", "src/mksz_api"]

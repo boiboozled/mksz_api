@@ -31,3 +31,16 @@ def test_lineup_json_puts_goalkeepers_first():
     assert players[0] == {"number": "1", "name": "BŐSZ DÁNIEL", "gk": True, "time_on_court": "43:27"}
     assert "gk" not in players[2]
     assert lineup["score"] == {"PLER-Budapest": "22", "Szigetszentmiklósi KSK": "20"}
+
+
+def test_second_team_tab():
+    """The Szigetszentmiklósi KSK tab of the same match (the second team tab, active after clicking it)."""
+    html = (Path(__file__).parent / "fixtures" / "szksk_tab.html").read_text(encoding="utf-8")
+    team = parse_active_team(html)
+    assert team.name == "Szigetszentmiklósi KSK"
+    assert len(team.players) == 16
+    by_number = {p.number: p for p in team.players}
+    assert by_number["12"].name == "HOLLÓ BALÁZS PÉTER" and by_number["12"].gk
+    assert by_number["12"].time_on_court == "49:02"
+    assert [p.number for p in team.players if p.gk] == ["12", "65", "99"]
+    assert by_number["99"].time_on_court is None  # did not play
