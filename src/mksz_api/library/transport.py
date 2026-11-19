@@ -9,8 +9,11 @@ different transport (e.g. plain HTTP) can be plugged in without touching them.
 from __future__ import annotations
 
 import atexit
+import queue
 import re
+import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import unquote
@@ -48,9 +51,48 @@ class Transport(Protocol):
         ...
 
 
+class _BrowserThread:
+    """A daemon thread that runs every Playwright call of one BrowserTransport.
+
+    Playwright's sync API refuses to run in a thread with a running asyncio loop (Jupyter, IPython,
+    async apps), and its objects may only be used from the thread that created them. Running all browser
+    work on this dedicated thread makes the transport usable from anywhere, including notebooks."""
+
+    def __init__(self):
+        self._jobs: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name="mksz-browser", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            fn, args, fut = job
+            if not fut.set_running_or_notify_cancel():
+                continue
+            try:
+                fut.set_result(fn(*args))
+            except BaseException as e:  # noqa: BLE001 - handed back to the caller
+                fut.set_exception(e)
+
+    def run(self, fn, *args):
+        if threading.current_thread() is self._thread:
+            return fn(*args)
+        fut: Future = Future()
+        self._jobs.put((fn, args, fut))
+        return fut.result()
+
+    def stop(self) -> None:
+        self._jobs.put(None)
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout=30)
+
+
 class BrowserTransport:
     """Headless Chromium via Playwright. One browser is shared by all requests; pages are loaded at most
-    one per `delay` seconds to stay polite."""
+    one per `delay` seconds to stay polite. Works in scripts and in Jupyter notebooks alike: the browser
+    lives on its own worker thread."""
 
     def __init__(self, delay: float = 2.0, timeout: float = 45.0, headless: bool = True, retries: int = 1):
         self.delay = delay
@@ -61,18 +103,30 @@ class BrowserTransport:
         self._browser = None
         self._context = None
         self._last = 0.0
+        self._worker: _BrowserThread | None = None
+        self._lock = threading.Lock()
+        self._atexit = False
 
-    def _ensure(self):
+    def _run(self, fn, *args):
+        with self._lock:
+            if self._worker is None:
+                self._worker = _BrowserThread()
+                if not self._atexit:
+                    atexit.register(self.close)
+                    self._atexit = True
+            worker = self._worker
+        return worker.run(fn, *args)
+
+    def _ensure(self):  # runs on the worker thread
         if self._context is None:
             from playwright.sync_api import sync_playwright
 
             self._pw = sync_playwright().start()
             self._browser = self._pw.chromium.launch(headless=self.headless)
             self._context = self._browser.new_context(locale="hu-HU")
-            atexit.register(self.close)
         return self._context
 
-    def close(self) -> None:
+    def _close_browser(self) -> None:  # runs on the worker thread
         for obj, meth in ((self._context, "close"), (self._browser, "close"), (self._pw, "stop")):
             if obj is not None:
                 try:
@@ -81,6 +135,18 @@ class BrowserTransport:
                     pass
         self._pw = self._browser = self._context = None
 
+    def close(self) -> None:
+        """Close the browser and stop its thread. The transport can still be used afterwards: the next
+        fetch starts a new browser."""
+        with self._lock:
+            worker, self._worker = self._worker, None
+        if worker is None:
+            return
+        try:
+            worker.run(self._close_browser)
+        finally:
+            worker.stop()
+
     def __enter__(self):
         return self
 
@@ -88,6 +154,9 @@ class BrowserTransport:
         self.close()
 
     def fetch(self, request: PageRequest) -> dict[str, Any]:
+        return self._run(self._fetch_with_retries, request)
+
+    def _fetch_with_retries(self, request: PageRequest) -> dict[str, Any]:  # runs on the worker thread
         last_error: Exception | None = None
         for _ in range(self.retries + 1):
             try:
