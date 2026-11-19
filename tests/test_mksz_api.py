@@ -245,3 +245,102 @@ def test_boxscore_unplayed_match(env):
     t.pages["/jegyzokonyv/999999999"] = {"report": report}
     with pytest.raises(NoDataError):
         BoxScore("999999999", **kw)
+
+
+# -- shot chart ---------------------------------------------------------------------------------------------
+
+from mksz_api.endpoints import ShotChart  # noqa: E402
+from mksz_api.library.zones import COURT_ZONES, court_zone, goal_cell  # noqa: E402
+
+PLER_2025, SZKSK_2025, HOLLO = 3810367232, 3810367253, 2640
+
+
+def _nonzero(ds, key):
+    return {r[key]: (r["GOALS"], r["ATTEMPTS"]) for r in ds.get_records() if r["ATTEMPTS"]}
+
+
+def test_shotchart_player_matches_site_panel(env):
+    """Ocvirk's 'Lövési statisztikák' panel on livescore.mksz.hu/32021352123: 6/12; court bubbles
+    0/2 (left back), 5/8 (centre), 1/2 (7 m); goal cells 1/2, 2/2, 1/2, 1/1, 1/1; post 0, missed 1, blocked 3."""
+    _, kw = env
+    sc = ShotChart(match_id="32021352123", player_name="ocvirk", **kw)
+    assert _nonzero(sc.zone_summary, "SHOT_ZONE") == {2: (5, 8), 3: (0, 2), 17: (1, 2)}
+    assert _nonzero(sc.goal_summary, "GOAL_CELL") == {3: (1, 2), 5: (2, 2), 6: (1, 2), 8: (1, 1), 9: (1, 1)}
+    s = sc.summary.get_records()[0]
+    assert (s["GOALS"], s["ATTEMPTS"], s["POST"], s["MISSED"], s["BLOCKED"]) == (6, 12, 0, 1, 3)
+    assert (s["GOALS_7M"], s["ATTEMPTS_7M"]) == (1, 2)
+    shots = sc.shots.get_records()
+    assert {r["PLAYER_NAME"] for r in shots} == {"OCVIRK GREGOR"}
+    assert all(r["OPPONENT_TEAM_NAME"] == "Szigetszentmiklósi KSK" for r in shots)
+    assert all(r["SHOT_ZONE"] == 17 for r in shots if r["IS_7M"])
+    assert all(r["GOAL_CELL"] is None for r in shots if r["OUTCOME"] == "BLOCKED")
+
+
+def test_shotchart_team_totals_match_page(env):
+    _, kw = env
+    for team, goals in ((PLER_2025, 22), (SZKSK_2025, 20)):
+        s = ShotChart(match_id="32021352123", team_id=team, **kw).summary.get_records()[0]
+        assert (s["GOALS"], s["ATTEMPTS"]) == (goals, 42)  # page: 22/42 and 20/42
+    conceded = ShotChart(match_id="32021352123", opponent_team_id=PLER_2025, **kw).summary.get_records()[0]
+    assert (conceded["GOALS"], conceded["ATTEMPTS"]) == (20, 42)
+
+
+def test_shotchart_goalkeeper_matches_report(env):
+    _, kw = env
+    sc = ShotChart(match_id="32021352123", goalkeeper_id=HOLLO, **kw)
+    s = sc.summary.get_records()[0]
+    report = next(p for p in BoxScore("32021352123", **kw).player_stats.get_records() if p["PLAYER_ID"] == HOLLO)
+    assert (s["SAVED"], s["ON_TARGET"]) == (report["SAVES"], report["SHOTS_FACED"]) == (10, 27)
+    assert {r["GOALKEEPER_NAME"] for r in sc.shots.get_records()} == {"HOLLÓ BALÁZS PÉTER"}
+
+
+def test_shotchart_multiple_matches_and_zone_table(env):
+    _, kw = env
+    sc = ShotChart(match_ids=["32021352123", "32021422857"], **kw)
+    s = sc.summary.get_records()[0]
+    assert s["MATCHES"] == 2 and s["GOALS"] == 22 + 20 + 26 + 25
+    zones = sc.zone_summary.get_records()
+    assert [z["SHOT_ZONE"] for z in zones] == list(range(18))
+    assert sum(z["ATTEMPTS"] for z in zones) + s["ATTEMPTS_NO_ZONE"] == s["ATTEMPTS"]
+    assert all(0 <= z["COURT_X"] <= 1 and 0 <= z["COURT_Y"] <= 1 for z in zones)
+    assert [d.name for d in sc.data_sets] == ["Shots", "ZoneSummary", "GoalSummary", "Summary", "MissingMatches"]
+
+
+def test_shotchart_ambiguous_name(env):
+    _, kw = env
+    with pytest.raises(ValueError, match="ambiguous"):
+        ShotChart(match_id="32021352123", player_name="balazs", **kw)  # several BALÁZS
+
+
+def test_shotchart_needs_scope():
+    with pytest.raises(ValueError):
+        ShotChart(player_id=1, get_request=False)
+
+
+def test_shotchart_season_mode(env):
+    """Season scope: played matches only, only the team's matches with team_id, missing logs reported."""
+    t, kw = env
+    template = load("program_320228793_window.json")[0]
+
+    def match(mid, home, away, score):
+        return {**template, "merkozesId": mid, "hazaiCsapatId": home, "vendegCsapatId": away,
+                "hazaiCsapatGol": score, "vendegCsapatGol": score}
+
+    pler, szksk = 3810384718, 3810384439  # 2026/27 team ids, as in events_32021422857
+    t.pages["/versenyek/felnottFerfiVersenyek/32027115/320228793"]["program"] = [
+        match(32021422857, pler, szksk, 26),       # played, has a log
+        match(32021400001, pler, 3810000000, None),  # not played yet: skipped
+        match(32021400002, szksk, pler, 30),       # played, no livescore log
+        match(32021400003, 3810000001, 3810000000, 20),  # another team's match: not loaded
+    ]
+    t.pages["livescore.mksz.hu/32021400002/"] = {"events": []}
+    sc = ShotChart(season="2026/27", league="NBI", gender="F", team_id=pler, **kw)
+    assert sc.summary.get_records()[0]["GOALS"] == 26
+    assert [m["MATCH_ID"] for m in sc.missing_matches.get_records()] == ["32021400002"]
+    assert not any("32021400001" in u or "32021400003" in u for u in t.calls)
+
+
+def test_zone_parsing():
+    assert court_zone("0") == 0 and court_zone(9) == 9 and court_zone(None) is None and court_zone("99") is None
+    assert goal_cell(0) is None and goal_cell("5") == 5
+    assert COURT_ZONES[17].name_hu == "7 méteres"
