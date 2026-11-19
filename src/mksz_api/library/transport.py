@@ -32,6 +32,10 @@ class Capture:
     name: str
     pattern: str  # regex searched in the URL-decoded response URL
     api_path: str | None = None  # the API path the page calls; informational, for non-browser transports
+    # Ignore empty responses ([] / {}) and keep waiting for the next match. For pages that fire a stale
+    # request while switching state (e.g. new season with the previous season's filters), which matches
+    # the pattern but returns nothing, before the real request.
+    skip_empty: bool = False
 
 
 @dataclass
@@ -173,16 +177,19 @@ class BrowserTransport:
             time.sleep(wait)
         timeout = request.timeout or self.timeout
         got: dict[str, Any] = {}
-        patterns = [(c.name, re.compile(c.pattern)) for c in request.captures]
+        patterns = [(c.name, re.compile(c.pattern), c.skip_empty) for c in request.captures]
 
         def on_response(resp):
             url = unquote(resp.url)
-            for name, rx in patterns:
+            for name, rx, skip_empty in patterns:
                 if name not in got and rx.search(url):
                     try:
-                        got[name] = resp.json()
+                        payload = resp.json()
                     except Exception:  # noqa: BLE001 - non-JSON body (error page); keep waiting
-                        pass
+                        continue
+                    if skip_empty and not payload:
+                        continue
+                    got[name] = payload
 
         page = self._ensure().new_page()
         try:
@@ -199,7 +206,7 @@ class BrowserTransport:
         finally:
             self._last = time.monotonic()
             page.close()
-        missing = [name for name, _ in patterns if name not in got]
+        missing = [name for name, _, _ in patterns if name not in got]
         if missing:
             what = "page script never succeeded" if not script_done else f"no payload for {missing}"
             raise CaptureTimeout(f"{request.url}: {what} within {timeout:.0f}s")

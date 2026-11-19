@@ -33,8 +33,11 @@ def competitions(year: int) -> PageRequest:
       const o = [...s.options].find(o => o.text.trim() === {label}); if (!o) return false;
       if (s.value !== o.value) {{ s.value = o.value; s.dispatchEvent(new Event('change', {{bubbles: true}})); }}
       return true; }}"""
+    # While switching season the page can first request the new season with the old season's age-group id
+    # (korosztalyId), which returns []; skip_empty waits for the real request that follows.
     captures = [
-        Capture(g, API + rf"versenyek/foversenyek\?(?=.*evadEv\.equals={year}\b)(?=.*nem\.in={g}\b)", "versenyek/foversenyek")
+        Capture(g, API + rf"versenyek/foversenyek\?(?=.*evadEv\.equals={year}\b)(?=.*nem\.in={g}\b)",
+                "versenyek/foversenyek", skip_empty=True)
         for g in ("F", "N")
     ]
     return PageRequest(f"{MKSZ}/minden-kezilabda", captures, script=script)
