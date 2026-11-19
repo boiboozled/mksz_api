@@ -5,6 +5,8 @@
     mksz matches --season 2026/27 --league NBI --gender F -o data/nb1_men_2026.csv
     mksz boxscore 32021352123 -o data/csv/
     mksz pbp 32021352123 -o data/csv/
+    mksz shotchart 32021352123 --player Ocvirk -o data/shots/   # shots + zone/goal-cell summaries
+    mksz shotchart --season 2025/26 --league NBI --gender F --goalkeeper-id 2640 -o data/gk/
     mksz scrape --from data/nb1_men_2026.csv -o data/csv/      # boxscores + play-by-play for many matches
 
 Raw payloads are cached under data/raw (or $MKSZ_CACHE_DIR), so re-running only loads pages for matches
@@ -18,7 +20,9 @@ import csv
 import sys
 from pathlib import Path
 
-from mksz_api.endpoints import BoxScore, CompetitionFinder, MatchFinder, NoDataError, PlayByPlay, Seasons, Standings
+from mksz_api.endpoints import (
+    BoxScore, CompetitionFinder, MatchFinder, NoDataError, PlayByPlay, Seasons, ShotChart, Standings,
+)
 from mksz_api.library.cache import Cache
 from mksz_api.library.transport import BrowserTransport, TransportError, set_transport
 
@@ -148,6 +152,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("match_id")
     p.add_argument("-o", "--output", help="CSV path (default: print)")
 
+    p = sub.add_parser("shotchart", help="shot locations/outcomes of a player, team or goalkeeper")
+    p.add_argument("match_ids", nargs="*", help="match id(s); or use --season with --league/--competition/--stage")
+    p.add_argument("--season")
+    p.add_argument("--league")
+    p.add_argument("--gender")
+    p.add_argument("--competition", type=int)
+    p.add_argument("--stage", type=int)
+    p.add_argument("--player", help="player name (part of it; accents/case ignored)")
+    p.add_argument("--player-id", type=int)
+    p.add_argument("--team-id", type=int, help="shots taken by this team")
+    p.add_argument("--opponent-team-id", type=int, help="shots conceded by this team")
+    p.add_argument("--goalkeeper-id", type=int, help="shots faced by this goalkeeper")
+    p.add_argument("-o", "--output", help="directory for the CSVs (default: print the summaries)")
+
     p = sub.add_parser("scrape", help="boxscores + play-by-play of many matches into CSV tables")
     p.add_argument("match_ids", nargs="*")
     p.add_argument("--from", dest="from_csv", help="CSV with a MATCH_ID column (e.g. from `mksz matches`)")
@@ -172,6 +190,19 @@ def main(argv: list[str] | None = None) -> int:
             _write_endpoint(BoxScore(args.match_id, **common), args.output, f"{args.match_id}_")
         elif args.cmd == "pbp":
             _emit(PlayByPlay(args.match_id, **common).play_by_play, args.output)
+        elif args.cmd == "shotchart":
+            sc = ShotChart(
+                match_ids=args.match_ids or None, season=args.season, league=args.league, gender=args.gender,
+                competition_id=args.competition, stage_id=args.stage, player_id=args.player_id,
+                player_name=args.player, team_id=args.team_id, opponent_team_id=args.opponent_team_id,
+                goalkeeper_id=args.goalkeeper_id, **common,
+            )
+            if args.output:
+                _write_endpoint(sc, args.output, "")
+            else:
+                for ds in (sc.summary, sc.zone_summary, sc.goal_summary, sc.missing_matches):
+                    print(f"\n== {ds.name}")
+                    _emit(ds, None)
         elif args.cmd == "scrape":
             return cmd_scrape(args, common)
     except (NoDataError, TransportError, ValueError) as e:

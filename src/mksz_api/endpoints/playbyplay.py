@@ -72,7 +72,7 @@ class PlayByPlay(Endpoint):
     HEADERS = [
         "MATCH_ID", "EVENT_NUM", "PERIOD", "PERIOD_NAME", "CLOCK", "ELAPSED_SEC", "HOME_AWAY", "TEAM_ID",
         "TEAM_NAME", "EVENT_TYPE", "ACTION", "ACTION_NAME", "PLAYER_ID", "JERSEY", "PLAYER_NAME", "IS_STAFF",
-        "PLAYER_IN_ID", "PLAYER_IN_NAME", "PLAYER_OUT_ID", "PLAYER_OUT_NAME", "OPP_GOALKEEPER_ID",
+        "PLAYER_IN_ID", "PLAYER_IN_NAME", "PLAYER_OUT_ID", "PLAYER_OUT_NAME", "OPP_GOALKEEPER_ID", "OPP_GOALKEEPER_NAME",
         "SHOT_AREA", "GOAL_AREA", "HOME_SCORE", "AWAY_SCORE", "WALLCLOCK_UTC", "SOURCE_ID",
     ]
 
@@ -162,6 +162,7 @@ def parse_events(payload: list[dict], match_id: str) -> list[dict]:
         if action in GOAL_ACTIONS and side:
             score[side] += 1
         jersey, name, is_staff = people.get(player_id, (None, None, False))
+        gk_id = (params.get("otherTeamGoalKeeper") or {}).get("id")
         up, down = e.get("up") or {}, e.get("down") or {}
         if action == "Kiállítás":  # suspension: the excluded player leaves
             down = e.get("excluded") or down
@@ -194,7 +195,8 @@ def parse_events(payload: list[dict], match_id: str) -> list[dict]:
             "PLAYER_IN_NAME": up.get("name"),
             "PLAYER_OUT_ID": down.get("id"),
             "PLAYER_OUT_NAME": down.get("name"),
-            "OPP_GOALKEEPER_ID": (params.get("otherTeamGoalKeeper") or {}).get("id"),
+            "OPP_GOALKEEPER_ID": gk_id,
+            "OPP_GOALKEEPER_NAME": people.get(gk_id, (None, None, False))[1] if gk_id is not None else None,
             "SHOT_AREA": params.get("selectedArea"),
             "GOAL_AREA": params.get("selectedGateArea"),
             "HOME_SCORE": score["A"],

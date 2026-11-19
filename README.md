@@ -41,6 +41,9 @@ plain dicts/JSON or CSV files.
   technical faults, sanctions and time on court, plus team totals, bench officials and referees.
 - **Play-by-play** from the livescore log: every shot (with court and goal zone), save, turnover,
   sanction, timeout and substitution, in chronological order with a running score.
+- **Shot charts**: shot locations (18 court zones, 3×3 goal grid) and outcomes for a player, a team
+  or a goalkeeper, for one match or a whole season. These are the numbers behind the livescore
+  "Lövési / Védési statisztikák" panels, downloadable as CSV.
 - **Standings** for any league stage.
 - **nba_api-like interface**: endpoint classes with `get_data_frames()`, `get_dict()`, `get_json()`
   and named datasets.
@@ -82,7 +85,7 @@ sudo "$(which python)" -m playwright install-deps chromium
 
 ```python
 from mksz_api.static import competitions
-from mksz_api.endpoints import MatchFinder, BoxScore, PlayByPlay, Standings
+from mksz_api.endpoints import MatchFinder, BoxScore, PlayByPlay, ShotChart, Standings
 
 # Find a competition (gender: "F" = men / férfi, "N" = women / női)
 nb1 = competitions.find_competition_by_name("NB I", gender="F", season="2025/26")
@@ -100,6 +103,11 @@ teams = box.team_stats.get_data_frame()
 # Play-by-play
 pbp = PlayByPlay("32021352123").play_by_play.get_data_frame()
 goals = pbp[pbp.EVENT_TYPE.isin(["GOAL", "GOAL_7M"])]
+
+# Shot chart: where a player shoots from and where the shots go (one match or a season)
+shots = ShotChart(match_id="32021352123", player_name="Ocvirk")
+zones = shots.zone_summary.get_data_frame()     # goals/attempts per court zone
+cells = shots.goal_summary.get_data_frame()     # goals/attempts per goal cell
 
 # League table
 table = Standings(stage_id=320228793, season="2026/27").standings.get_data_frame()
@@ -135,6 +143,7 @@ MKSZ organises its data in four levels:
 | `Standings` | `stage_id`, `season` | `Standings` |
 | `BoxScore` | `match_id` | `MatchInfo`, `PlayerStats`, `TeamStats`, `StaffStats`, `Officials` |
 | `PlayByPlay` | `match_id` | `PlayByPlay` |
+| `ShotChart` | `match_id` / `match_ids`, or `season` + `league` / `competition_id` / `stage_id`; filters `player_id`, `player_name`, `team_id`, `opponent_team_id`, `goalkeeper_id` | `Shots`, `ZoneSummary`, `GoalSummary`, `Summary`, `MissingMatches` |
 
 All endpoints are importable from `mksz_api.endpoints` and also accept these keyword arguments:
 
@@ -173,12 +182,67 @@ instead of a bundled list.
 `TECHNICAL_FAULTS`, `YELLOW_CARDS`, `TWO_MINUTES`, `RED_CARDS`, `BLUE_CARDS`, `SECONDS_PLAYED`, `MIN`.
 
 **`PlayByPlay`**: `EVENT_NUM`, `PERIOD`, `CLOCK`, `ELAPSED_SEC`, `HOME_AWAY`, `TEAM_NAME`, `EVENT_TYPE`,
-`PLAYER_NAME`, `JERSEY`, `PLAYER_IN_NAME`, `PLAYER_OUT_NAME`, `OPP_GOALKEEPER_ID`, `SHOT_AREA`,
+`PLAYER_NAME`, `JERSEY`, `PLAYER_IN_NAME`, `PLAYER_OUT_NAME`, `OPP_GOALKEEPER_ID`, `OPP_GOALKEEPER_NAME`, `SHOT_AREA`,
 `GOAL_AREA`, `HOME_SCORE`, `AWAY_SCORE`. `EVENT_TYPE` is one of `GOAL`, `GOAL_7M`, `SHOT_SAVED`,
 `SHOT_7M_SAVED`, `SHOT_MISSED`, `SHOT_7M_MISSED`, `SHOT_POST`, `SHOT_7M_POST`, `SHOT_BLOCKED`,
 `TURNOVER`, `TECHNICAL_FAULT`, `TWO_MINUTES`, `YELLOW_CARD`, `RED_CARD`, `BLUE_CARD`, `TIMEOUT`,
 `STARTER`, `SUBSTITUTION`, `SUSPENSION_LEAVE`, `SUSPENSION_RETURN`, `PERIOD_START` or
 `GOALKEEPER_CHANGE`.
+
+### Shot charts
+
+`ShotChart` works like nba_api's `ShotChartDetail`. It returns the data behind the livescore page's
+shooting panel ("Lövési statisztikák", shown when you click a player) and goalkeeping panel
+("Védési statisztikák"). It can cover one match, several matches or a whole season:
+
+```python
+from mksz_api.endpoints import ShotChart
+
+ShotChart(match_id="32021352123", player_name="Ocvirk")                         # player, one match
+ShotChart(season="2025/26", league="NBI", gender="F", player_id=313252,
+          team_id=3810367232)                                                   # player, a season
+ShotChart(match_id="32021352123", team_id=3810367232)                           # a team's shots
+ShotChart(match_id="32021352123", opponent_team_id=3810367232)                  # shots a team conceded
+ShotChart(season="2025/26", league="NBI", gender="F", goalkeeper_id=2640)       # a keeper's saves map
+```
+
+| Dataset | Content |
+|---|---|
+| `Shots` | One row per attempt: match, period, clock, team, opponent, player, `OUTCOME` (`GOAL`, `SAVED`, `MISSED`, `POST`, `BLOCKED`), `IS_7M`, `SHOT_ZONE` + names, `GOAL_CELL` + `GOAL_ROW` / `GOAL_SIDE`, goalkeeper, score |
+| `ZoneSummary` | The 18 court zones: `ATTEMPTS`, `GOALS`, `GOAL_PCT`, `SAVED`, `MISSED`, `POST`, `BLOCKED`, `ON_TARGET`, `SAVE_PCT`, `SHARE_PCT`, plus `COURT_X` / `COURT_Y` for plotting |
+| `GoalSummary` | The 9 goal cells, with the same counts |
+| `Summary` | Totals, 7 m attempts/goals, and how many attempts lack a recorded zone or goal cell |
+| `MissingMatches` | Matches in scope without a livescore log |
+
+Counting follows the site. Blocked shots are attempts from their court zone. 7 m throws are zone 17.
+The goal grid counts only attempts with a recorded goal cell. For a goalkeeper, `SAVED` / `ON_TARGET`
+equal the report's saves and shots faced.
+
+**Court zones** (`SHOT_ZONE`): the goal is at the top and "right" is the attacker's right.
+`COURT_X` runs 0 (left) to 1 (right), and `COURT_Y` runs 0 (goal line) to 1 (half-way line).
+
+| Zone | Name | Site label | Zone | Name | Site label |
+|---|---|---|---|---|---|
+| 0 | Right wing | Jobbszélső | 9 | Centre pivot | Közép beálló |
+| 1 | Right back | Jobb közép | 10 | Left pivot | Bal beálló |
+| 2 | Centre back | Közép | 11 | Right breakthrough | Jobb betörés |
+| 3 | Left back | Bal közép | 12 | Centre breakthrough | Közép betörés |
+| 4 | Left wing | Balszélső | 13 | Left breakthrough | Bal betörés |
+| 5 | Right back, long range | Jobb távol | 14 | Kínai (trick shot) | Kínai |
+| 6 | Centre, long range | Közép távol | 15 | Fast break | Gyorsindítás |
+| 7 | Left back, long range | Bal távol | 16 | Own half | Saját térfél |
+| 8 | Right pivot | Jobb beálló | 17 | 7 m throw | 7 méteres |
+
+**Goal cells** (`GOAL_CELL`): a 3×3 grid as seen by the shooter, numbered row by row from top-left:
+
+```
+1 2 3      TOP    LEFT / CENTRE / RIGHT
+4 5 6      MIDDLE
+7 8 9      BOTTOM
+```
+
+In season mode, `ShotChart` loads every played match in scope once (then from the cache). Passing
+`team_id` or `opponent_team_id` restricts loading to that team's matches.
 
 ## Command-line interface
 
@@ -192,13 +256,17 @@ mksz matches --season 2026 --stage 320228996 -o data/nb2_group_a.csv
 mksz standings 320228793 --season 2026/27
 mksz boxscore 32021352123 -o data/csv/          # one CSV per dataset (omit -o to print)
 mksz pbp 32021352123 -o data/pbp.csv
+mksz shotchart 32021352123 --player Ocvirk -o data/shots/
+mksz shotchart --season 2025/26 --league NBI --gender F --team-id 3810367232 --player Ocvirk -o data/shots/
+mksz shotchart --season 2025/26 --league NBI --gender F --goalkeeper-id 2640 -o data/gk/
 mksz scrape --from data/nb1_men_2025.csv -o data/csv/
 ```
 
 `mksz scrape` collects boxscores and play-by-play for many matches (from IDs given as arguments or a
 CSV with a `MATCH_ID` column). It writes `match_info.csv`, `player_stats.csv`, `team_stats.csv`,
 `staff_stats.csv`, `officials.csv` and `play_by_play.csv`. Unplayed matches are skipped; `--no-pbp`
-skips play-by-play.
+skips play-by-play. `mksz shotchart` writes `shots.csv`, `zone_summary.csv`, `goal_summary.csv`,
+`summary.csv` and `missing_matches.csv` (without `-o` it prints the summaries).
 
 | Global option | Default | Meaning |
 |---|---|---|
@@ -253,7 +321,8 @@ the site's code.
   are re-sorted chronologically and the score is recomputed from the goal events. `CLOCK` is cumulative
   game time (`mm:ss`).
 - **Coverage varies by league.** Lower leagues (e.g. NB II) log shots, goals and sanctions but not
-  substitutions, so time on court is missing there.
+  substitutions, so time on court is missing there. Some of their shots also lack a court zone or goal
+  cell; `ShotChart`'s `Summary` counts them (`ATTEMPTS_NO_ZONE`, `ATTEMPTS_NO_GOAL_CELL`).
 - Unplayed matches raise `mksz_api.endpoints.NoDataError`, as do matches without a livescore log
   (`PlayByPlay`).
 - Discovery covers **adult** competitions; youth and beach competitions are not listed yet.
@@ -291,11 +360,12 @@ Project layout:
 
 ```
 src/mksz_api/
-├── endpoints/        # Seasons, CompetitionFinder, MatchFinder, Standings, BoxScore, PlayByPlay
+├── endpoints/        # Seasons, CompetitionFinder, MatchFinder, Standings, BoxScore, PlayByPlay, ShotChart
 ├── library/
 │   ├── pages.py      # which page carries which payload (site-specific knowledge lives here)
 │   ├── transport.py  # BrowserTransport, Transport protocol
 │   ├── cache.py      # raw payload cache
+│   ├── zones.py      # court zones and goal cells of the shot charts
 │   └── parameters.py # season / gender / league parsing
 ├── static/           # competition lookups
 └── cli.py            # the `mksz` command
