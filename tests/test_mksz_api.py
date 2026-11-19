@@ -100,6 +100,59 @@ def test_static_competitions(env):
     assert women["id"] == 32027118
 
 
+def test_empty_cached_competitions_are_refetched(env):
+    # Older versions could cache {"F": [], "N": []} for a past season and then never reload it.
+    t, kw = env
+    kw["cache"].put("competitions", 2026, {"F": [], "N": []})
+    c = competitions.find_competition_by_name("NB I", gender="F", season="2026/27", **kw)
+    assert c["id"] == 32027115 and len(t.calls) == 1
+    assert any(kw["cache"].get("competitions", 2026).values())  # the bad entry was replaced
+
+
+def test_competitions_capture_skips_stale_empty_response(monkeypatch):
+    """While switching season the page first requests the new season with the old age-group id, which
+    returns []. The transport must wait for the real response instead of keeping the empty one."""
+    from mksz_api.library.transport import BrowserTransport
+
+    req = pages.competitions(2025)
+    api = "https://public.mksz.hu/public/api/v1/versenyek/foversenyek?evadEv.equals=2025&nem.in={g}&korosztalyId.equals={k}"
+    responses = [  # (url, body) in the order the page receives them
+        (api.format(g="N", k=12020648), []), (api.format(g="F", k=12020645), []),  # stale: old season's ids
+        (api.format(g="F", k=12020581), [{"id": 1}]), (api.format(g="N", k=12020584), [{"id": 2}]),
+    ]
+
+    class Resp:
+        def __init__(self, url, body):
+            self.url, self._body = url, body
+
+        def json(self):
+            return self._body
+
+    class Page:
+        def on(self, event, cb):
+            self.cb = cb
+
+        def goto(self, url, **_):
+            for url_, body in responses:
+                self.cb(Resp(url_, body))
+
+        def evaluate(self, script):
+            return True
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def close(self):
+            pass
+
+    t = BrowserTransport(delay=0, timeout=1)
+    monkeypatch.setattr(t, "_ensure", lambda: type("Ctx", (), {"new_page": lambda self: Page()})())
+    try:
+        assert t.fetch(req) == {"F": [{"id": 1}], "N": [{"id": 2}]}
+    finally:
+        t.close()
+
+
 def test_match_finder(env):
     t, kw = env
     mf = MatchFinder(season="2026/27", league="NBI", gender="F", **kw)

@@ -87,13 +87,15 @@ class CompetitionFinder(Endpoint):
         """One page load returns both genders' lists; cache them together as one payload."""
         if not self.refresh:
             cached = self.cache.get("competitions", self.year, max_age=DAY, is_final=lambda _: _past(self.year))
-            if cached is not None:
+            # An all-empty entry is a bad capture (older versions could store one), never a real season.
+            if cached is not None and any(cached.values()):
                 return cached
         from mksz_api.library.transport import get_transport
 
         got = (self.transport or get_transport()).fetch(pages.competitions(self.year))
         data = {"F": got["F"], "N": got["N"]}
-        self.cache.put("competitions", self.year, data)
+        if any(data.values()):
+            self.cache.put("competitions", self.year, data)
         return data
 
     def _parse(self, raw: dict[str, Any]) -> list[DataSet]:
