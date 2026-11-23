@@ -24,24 +24,13 @@ import unicodedata
 from typing import Any
 
 from mksz_api.endpoints._base import DataSet, Endpoint, NoDataError, make_dataset, pct
-from mksz_api.endpoints.discovery import MatchFinder
+from mksz_api.endpoints._season import matches_in_scope, scope_args
 from mksz_api.endpoints.playbyplay import PlayByPlay, parse_events
 from mksz_api.library.transport import TransportError
 from mksz_api.library.zones import COURT_ZONES, GOAL_ROWS, GOAL_SIDES, SEVEN_METRE_ZONE, court_zone, goal_cell
 
-# PlayByPlay EVENT_TYPE -> (outcome, is 7 m throw)
-SHOT_EVENTS = {
-    "GOAL": ("GOAL", False),
-    "GOAL_7M": ("GOAL", True),
-    "SHOT_SAVED": ("SAVED", False),
-    "SHOT_7M_SAVED": ("SAVED", True),
-    "SHOT_MISSED": ("MISSED", False),
-    "SHOT_7M_MISSED": ("MISSED", True),
-    "SHOT_POST": ("POST", False),
-    "SHOT_7M_POST": ("POST", True),
-    "SHOT_BLOCKED": ("BLOCKED", False),
-}
-OUTCOMES = ["GOAL", "SAVED", "MISSED", "POST", "BLOCKED"]
+from mksz_api.library.events import SHOT_EVENTS  # noqa: E402  (re-exported: EVENT_TYPE -> (outcome, is 7 m))
+from mksz_api.library.events import SHOT_OUTCOMES as OUTCOMES  # noqa: E402
 
 
 def _norm(text: str | None) -> str:
@@ -102,11 +91,7 @@ class ShotChart(Endpoint):
         goalkeeper_id: int | None = None,
         **kwargs,
     ):
-        self.match_ids = [str(m) for m in ([match_id] if match_id is not None else []) + list(match_ids or [])]
-        self.scope = {"season": season, "league": league, "gender": gender,
-                      "competition_id": competition_id, "stage_id": stage_id}
-        if not self.match_ids and league is None and competition_id is None and stage_id is None:
-            raise ValueError("give match_id / match_ids, or season with league / competition_id / stage_id")
+        self.match_ids, self.scope = scope_args(match_id, match_ids, season, league, gender, competition_id, stage_id)
         self.player_id = int(player_id) if player_id is not None else None
         self.player_name = player_name
         self.team_id = int(team_id) if team_id is not None else None
@@ -122,14 +107,9 @@ class ShotChart(Endpoint):
 
     # -- loading ------------------------------------------------------------------------------------------
     def _matches_in_scope(self) -> list[dict]:
-        if self.match_ids:
-            return [{"MATCH_ID": m, "MATCH_DATE": None} for m in self.match_ids]
-        finder = MatchFinder(**self.scope, transport=self.transport, cache=self.cache, refresh=self.refresh)
-        rows = [r for r in finder.matches.get_records() if r["HOME_SCORE"] is not None]  # played only
-        teams = {t for t in (self.team_id, self.opponent_team_id) if t is not None}
-        if teams:  # only load the matches the team played
-            rows = [r for r in rows if {r["HOME_TEAM_ID"], r["AWAY_TEAM_ID"]} & teams]
-        return [{"MATCH_ID": r["MATCH_ID"], "MATCH_DATE": r["MATCH_DATE"]} for r in rows]
+        teams = {t for t in (self.team_id, self.opponent_team_id) if t is not None}  # only the team's matches
+        return matches_in_scope(self.match_ids, self.scope, teams, transport=self.transport, cache=self.cache,
+                                refresh=self.refresh)
 
     def _load(self) -> dict[str, Any]:
         matches = self._matches_in_scope()

@@ -23,6 +23,7 @@ plain dicts/JSON or CSV files.
 - [Quickstart](#quickstart)
 - [Concepts](#concepts)
 - [Endpoints](#endpoints)
+- [Advanced statistics](#advanced-statistics)
 - [Command-line interface](#command-line-interface)
 - [Caching and configuration](#caching-and-configuration)
 - [How it works](#how-it-works)
@@ -44,6 +45,11 @@ plain dicts/JSON or CSV files.
 - **Shot charts**: shot locations (18 court zones, 3×3 goal grid) and outcomes for a player, a team
   or a goalkeeper, for one match or a whole season. These are the numbers behind the livescore
   "Lövési / Védési statisztikák" panels, downloadable as CSV.
+- **Advanced statistics**: possessions, pace, offensive/defensive/net ratings per 50 possessions,
+  per-60-minute and per-game stats, handball "four factors", shot profiles, lineups with plus-minus and
+  on/off ratings, power play / short-handed / empty-net stats, lead changes and clutch time. All are
+  computed from the report and the livescore log, for one match or a season, like nba_api's
+  `LeagueDashTeamStats` / `LeagueDashPlayerStats`. See the [glossary](docs/glossary.md).
 - **Standings** for any league stage.
 - **nba_api-like interface**: endpoint classes with `get_data_frames()`, `get_dict()`, `get_json()`
   and named datasets.
@@ -86,6 +92,7 @@ sudo "$(which python)" -m playwright install-deps chromium
 ```python
 from mksz_api.static import competitions
 from mksz_api.endpoints import MatchFinder, BoxScore, PlayByPlay, ShotChart, Standings
+from mksz_api.endpoints import BoxScoreAdvanced, LeagueDashTeamStats, LeagueDashPlayerStats
 
 # Find a competition (gender: "F" = men / férfi, "N" = women / női)
 nb1 = competitions.find_competition_by_name("NB I", gender="F", season="2025/26")
@@ -108,6 +115,12 @@ goals = pbp[pbp.EVENT_TYPE.isin(["GOAL", "GOAL_7M"])]
 shots = ShotChart(match_id="32021352123", player_name="Ocvirk")
 zones = shots.zone_summary.get_data_frame()     # goals/attempts per court zone
 cells = shots.goal_summary.get_data_frame()     # goals/attempts per goal cell
+
+# Advanced stats: possessions, ratings per 50 possessions, lineups, situations (one match or a season)
+adv = BoxScoreAdvanced("32021352123")
+adv.team_advanced.get_data_frame()[["TEAM_NAME", "POSS", "PACE", "ORTG", "DRTG", "NET_RTG"]]
+teams = LeagueDashTeamStats(season="2025/26", league="NBI", gender="F", measure_type="Advanced")
+per60 = LeagueDashPlayerStats(season="2025/26", league="NBI", gender="F", per_mode="Per60", min_minutes=300)
 
 # League table
 table = Standings(stage_id=320228793, season="2026/27").standings.get_data_frame()
@@ -144,6 +157,9 @@ MKSZ organises its data in four levels:
 | `BoxScore` | `match_id` | `MatchInfo`, `PlayerStats`, `TeamStats`, `StaffStats`, `Officials` |
 | `PlayByPlay` | `match_id` | `PlayByPlay` |
 | `ShotChart` | `match_id` / `match_ids`, or `season` + `league` / `competition_id` / `stage_id`; filters `player_id`, `player_name`, `team_id`, `opponent_team_id`, `goalkeeper_id` | `Shots`, `ZoneSummary`, `GoalSummary`, `Summary`, `MissingMatches` |
+| `BoxScoreAdvanced` | `match_id`, `clutch` | `TeamAdvanced`, `ShotProfile`, `GameFlow`, `Situations`, `PlayerAdvanced`, `Goalkeeping`, `Possessions` |
+| `LeagueDashTeamStats` | `match_ids`, or `season` + `league` / `competition_id` / `stage_id`; `team_id`, `measure_type`, `per_mode`, `clutch` | `LeagueDashTeamStats`, `MissingMatches` |
+| `LeagueDashPlayerStats` | as `LeagueDashTeamStats`, plus `player_id`, `min_minutes` | `LeagueDashPlayerStats`, `MissingMatches` |
 
 All endpoints are importable from `mksz_api.endpoints` and also accept these keyword arguments:
 
@@ -244,6 +260,47 @@ equal the report's saves and shots faced.
 In season mode, `ShotChart` loads every played match in scope once (then from the cache). Passing
 `team_id` or `opponent_team_id` restricts loading to that team's matches.
 
+## Advanced statistics
+
+MKSZ publishes counting stats only. `mksz-api` derives the advanced stats analysts use from the report
+and the livescore log, following the [NBA stats glossary](https://www.nba.com/stats/help/glossary) where
+handball has an equivalent. Every column, with its formula, is in the **[glossary](docs/glossary.md)**.
+
+```python
+from mksz_api.endpoints import BoxScoreAdvanced, LeagueDashTeamStats, LeagueDashPlayerStats
+
+scope = dict(season="2025/26", league="NBI", gender="F")
+LeagueDashTeamStats(**scope, measure_type="Advanced")                       # pace, ORTG/DRTG/NET_RTG, TOV%, ...
+LeagueDashTeamStats(**scope, measure_type="FourFactors")                    # goal %, TOV %, retain %, 7 m rate
+LeagueDashTeamStats(**scope, measure_type="Situations")                     # even / power play / short-handed / empty net
+LeagueDashTeamStats(**scope, measure_type="GameFlow")                       # lead changes, runs, clutch, after timeouts
+LeagueDashPlayerStats(**scope, measure_type="Advanced", min_minutes=300)    # usage, plus-minus, on/off
+LeagueDashPlayerStats(**scope, measure_type="Goalkeeping")                  # save % by zone group, 7 m, per 60
+LeagueDashPlayerStats(**scope, per_mode="Per60", min_minutes=300)           # like NBA per 36
+LeagueDashTeamStats(**scope, measure_type="Advanced", clutch=True)          # clutch time only
+BoxScoreAdvanced("32021352123").possessions.get_data_frame()                 # every possession of a match
+```
+
+| | Values |
+|---|---|
+| `measure_type` (teams) | `Base`, `Advanced`, `FourFactors`, `ShotProfile`, `Situations`, `GameFlow` |
+| `measure_type` (players) | `Base`, `Advanced`, `Goalkeeping` |
+| `per_mode` | `Totals`, `PerGame`, `Per60`, `Per50Possessions` (counting columns only; rates are never scaled) |
+
+- **Possessions** are rebuilt from the livescore log. A possession ends with a goal, shot, turnover or
+  technical fault. If the attacking team gets the ball back after a save, miss or block, the possession
+  continues and counts as retained.
+- **Ratings are per 50 possessions**, the EHF convention (about one team's possessions in a match).
+- **Lineups** come from the log's substitution feed. For NB I they reproduce the report's time on court
+  to the second. They give plus-minus, on/off ratings, usage, and empty-net spells (the goalkeeper
+  swapped for a 7th field player).
+- **Season numbers** are computed from summed counts, never by averaging per-match rates.
+
+Matches without a livescore log still count for report-based columns. `PBP_GAMES` and `LINEUP_GAMES`
+show how many matches the possession- and lineup-based columns rest on, and `MissingMatches` lists the
+rest. Assists, steals, blocks and rebounds are not recorded by MKSZ, so stats built on them are not
+available.
+
 ## Command-line interface
 
 Installing the package provides the `mksz` command:
@@ -259,6 +316,9 @@ mksz pbp 32021352123 -o data/pbp.csv
 mksz shotchart 32021352123 --player Ocvirk -o data/shots/
 mksz shotchart --season 2025/26 --league NBI --gender F --team-id 3810367232 --player Ocvirk -o data/shots/
 mksz shotchart --season 2025/26 --league NBI --gender F --goalkeeper-id 2640 -o data/gk/
+mksz advanced 32021352123 -o data/adv/       # advanced box score (add --clutch for clutch time)
+mksz leaguedash teams --season 2025/26 --league NBI --gender F --measure Advanced
+mksz leaguedash players --season 2025/26 --league NBI --gender F --per-mode Per60 --min-minutes 300 -o data/per60.csv
 mksz scrape --from data/nb1_men_2025.csv -o data/csv/
 ```
 
@@ -360,8 +420,13 @@ Project layout:
 
 ```
 src/mksz_api/
-├── endpoints/        # Seasons, CompetitionFinder, MatchFinder, Standings, BoxScore, PlayByPlay, ShotChart
+├── endpoints/        # Seasons, CompetitionFinder, MatchFinder, Standings, BoxScore, PlayByPlay, ShotChart,
+│                     # BoxScoreAdvanced, LeagueDashTeamStats, LeagueDashPlayerStats
 ├── library/
+│   ├── possessions.py # possessions rebuilt from the play-by-play
+│   ├── oncourt.py    # lineups, suspensions and empty net from the lineup feed
+│   ├── advanced.py   # advanced-stat components, rates, measure types, per modes
+│   ├── events.py     # play-by-play event categories
 │   ├── pages.py      # which page carries which payload (site-specific knowledge lives here)
 │   ├── transport.py  # BrowserTransport, Transport protocol
 │   ├── cache.py      # raw payload cache
@@ -370,6 +435,7 @@ src/mksz_api/
 ├── static/           # competition lookups
 └── cli.py            # the `mksz` command
 src/mksz_roster/      # lineup export (`mksz-roster`)
+docs/glossary.md      # advanced statistics glossary
 scripts/recon.py      # dump the JSON a page receives
 tests/                # offline tests and fixtures
 ```
