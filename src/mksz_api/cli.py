@@ -8,6 +8,9 @@
     mksz shotchart 32021352123 --player Ocvirk -o data/shots/   # shots + zone/goal-cell summaries
     mksz shotchart --season 2025/26 --league NBI --gender F --goalkeeper-id 2640 -o data/gk/
     mksz scrape --from data/nb1_men_2026.csv -o data/csv/      # boxscores + play-by-play for many matches
+    mksz advanced 32021352123 [--clutch] -o data/adv/          # possessions, ratings, lineups, situations
+    mksz leaguedash teams --season 2025/26 --league NBI --gender F --measure Advanced
+    mksz leaguedash players --season 2025/26 --league NBI --gender F --measure Base --per-mode Per60 --min-minutes 120
 
 Raw payloads are cached under data/raw (or $MKSZ_CACHE_DIR), so re-running only loads pages for matches
 that are new or not finished yet.
@@ -21,8 +24,10 @@ import sys
 from pathlib import Path
 
 from mksz_api.endpoints import (
-    BoxScore, CompetitionFinder, MatchFinder, NoDataError, PlayByPlay, Seasons, ShotChart, Standings,
+    BoxScore, BoxScoreAdvanced, CompetitionFinder, LeagueDashPlayerStats, LeagueDashTeamStats, MatchFinder,
+    NoDataError, PlayByPlay, Seasons, ShotChart, Standings,
 )
+from mksz_api.library.advanced import PER_MODES
 from mksz_api.library.cache import Cache
 from mksz_api.library.transport import BrowserTransport, TransportError, set_transport
 
@@ -166,6 +171,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--goalkeeper-id", type=int, help="shots faced by this goalkeeper")
     p.add_argument("-o", "--output", help="directory for the CSVs (default: print the summaries)")
 
+    p = sub.add_parser("advanced", help="advanced box score of a match (possessions, ratings, lineups, ...)")
+    p.add_argument("match_id")
+    p.add_argument("--clutch", action="store_true", help="clutch time only (last 5 min / OT, margin <= 2)")
+    p.add_argument("-o", "--output", help="directory for the CSVs (default: print)")
+
+    p = sub.add_parser("leaguedash", help="season team or player stats (Base, Advanced, Per60, ...)")
+    p.add_argument("kind", choices=["teams", "players"])
+    p.add_argument("match_ids", nargs="*", help="match id(s); or use --season with --league/--competition/--stage")
+    p.add_argument("--season")
+    p.add_argument("--league")
+    p.add_argument("--gender")
+    p.add_argument("--competition", type=int)
+    p.add_argument("--stage", type=int)
+    p.add_argument("--team-id", type=int)
+    p.add_argument("--player-id", type=int, help="players only")
+    p.add_argument("--measure", default="Base",
+                   help="teams: Base, Advanced, FourFactors, ShotProfile, Situations, GameFlow; "
+                        "players: Base, Advanced, Goalkeeping (default Base)")
+    p.add_argument("--per-mode", default="Totals", choices=PER_MODES)
+    p.add_argument("--clutch", action="store_true")
+    p.add_argument("--min-minutes", type=float, default=0, help="players only")
+    p.add_argument("-o", "--output", help="CSV path (default: print)")
+
     p = sub.add_parser("scrape", help="boxscores + play-by-play of many matches into CSV tables")
     p.add_argument("match_ids", nargs="*")
     p.add_argument("--from", dest="from_csv", help="CSV with a MATCH_ID column (e.g. from `mksz matches`)")
@@ -203,6 +231,22 @@ def main(argv: list[str] | None = None) -> int:
                 for ds in (sc.summary, sc.zone_summary, sc.goal_summary, sc.missing_matches):
                     print(f"\n== {ds.name}")
                     _emit(ds, None)
+        elif args.cmd == "advanced":
+            _write_endpoint(BoxScoreAdvanced(args.match_id, clutch=args.clutch, **common), args.output,
+                            f"{args.match_id}_")
+        elif args.cmd == "leaguedash":
+            scope = dict(season=args.season, league=args.league, gender=args.gender, competition_id=args.competition,
+                         stage_id=args.stage, match_ids=args.match_ids or None, team_id=args.team_id,
+                         measure_type=args.measure, per_mode=args.per_mode, clutch=args.clutch)
+            if args.kind == "teams":
+                dash = LeagueDashTeamStats(**scope, **common)
+            else:
+                dash = LeagueDashPlayerStats(**scope, player_id=args.player_id, min_minutes=args.min_minutes, **common)
+            _emit(dash.data_sets[0], args.output)
+            if len(dash.missing_matches):
+                print(f"{len(dash.missing_matches)} match(es) without full data (see MissingMatches):", file=sys.stderr)
+                for m in dash.missing_matches.get_records():
+                    print(f"  {m['MATCH_ID']}: {m['REASON']}", file=sys.stderr)
         elif args.cmd == "scrape":
             return cmd_scrape(args, common)
     except (NoDataError, TransportError, ValueError) as e:

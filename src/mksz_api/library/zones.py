@@ -51,6 +51,27 @@ COURT_ZONES: dict[int, Zone] = {z.id: z for z in [
 ]}
 SEVEN_METRE_ZONE = 17
 
+# Court zones grouped by shooting position, for shot profiles and save rates. Attempts without a recorded
+# zone go to UNKNOWN.
+ZONE_GROUPS: dict[str, tuple[int, ...]] = {
+    "WING": (0, 4),
+    "BACK_9M": (1, 2, 3),
+    "LONG_RANGE": (5, 6, 7),
+    "PIVOT": (8, 9, 10),
+    "BREAKTHROUGH": (11, 12, 13),
+    "FAST_BREAK": (15,),
+    "SEVEN_M": (17,),
+    "OTHER": (14, 16),
+    "UNKNOWN": (),
+}
+_GROUP_OF = {z: g for g, zones in ZONE_GROUPS.items() for z in zones}
+
+
+def zone_group(zone: int | None) -> str:
+    """The ZONE_GROUPS key of a court zone id (UNKNOWN when the zone was not recorded)."""
+    return _GROUP_OF.get(zone, "UNKNOWN") if zone is not None else "UNKNOWN"
+
+
 GOAL_ROWS = {1: "TOP", 2: "TOP", 3: "TOP", 4: "MIDDLE", 5: "MIDDLE", 6: "MIDDLE", 7: "BOTTOM", 8: "BOTTOM", 9: "BOTTOM"}
 GOAL_SIDES = {1: "LEFT", 4: "LEFT", 7: "LEFT", 2: "CENTRE", 5: "CENTRE", 8: "CENTRE", 3: "RIGHT", 6: "RIGHT", 9: "RIGHT"}
 
